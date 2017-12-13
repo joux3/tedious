@@ -1,5 +1,6 @@
 const tls = require('tls');
 const crypto = require('crypto');
+const net = require('net');
 const EventEmitter = require('events').EventEmitter;
 const Transform = require('readable-stream').Transform;
 
@@ -50,6 +51,51 @@ class ReadablePacketStream extends Transform {
   }
 }
 
+class TLSHandler extends EventEmitter {
+  constructor(secureContext) {
+    super();
+    const self = this;
+    self.server = net.createServer();
+
+    self.server.listen(0, '127.0.0.1', () => {
+      self.cleartext = tls.connect({
+        host: '127.0.0.1',
+        port: self.server.address().port,
+        secureContext: secureContext,
+        rejectUnauthorized: false
+      });
+      self.cleartext.on('secureConnect', () => {
+        self.emit('secure');
+        self.cleartext.write('');
+      });
+    });
+
+    const encryptedOnQueue = [];
+    self.encrypted = {
+      on: (event, cb) => {
+        encryptedOnQueue.push([event, cb]);
+      }
+    };
+
+    self.server.on('connection', (socket) => {
+      self.encrypted = socket;
+      encryptedOnQueue.forEach(([event, cb]) => {
+        self.encrypted.on(event, cb);
+      });
+      self.server.close();
+    });
+  }
+
+  destroy() {
+    if (this.encrypted && this.encrypted.destroy) {
+      this.encrypted.destroy();
+    }
+    if (this.cleartext && this.cleartext.destroy) {
+      this.cleartext.destroy();
+    }
+  }
+}
+
 module.exports = class MessageIO extends EventEmitter {
   constructor(socket, _packetSize, debug) {
     super();
@@ -70,6 +116,10 @@ module.exports = class MessageIO extends EventEmitter {
 
     this.socket.pipe(this.packetStream);
     this.packetDataSize = this._packetSize - packetHeaderLength;
+
+    this.socket.on('close', () => {
+      this.emit('close');
+    });
   }
 
   packetSize(packetSize) {
@@ -84,54 +134,59 @@ module.exports = class MessageIO extends EventEmitter {
   startTls(credentialsDetails, hostname, trustServerCertificate) {
     const credentials = tls.createSecureContext ? tls.createSecureContext(credentialsDetails) : crypto.createCredentials(credentialsDetails);
 
-    this.securePair = tls.createSecurePair(credentials);
+    this.tlsHandler = new TLSHandler(credentials);
+
     this.tlsNegotiationComplete = false;
 
-    this.securePair.on('secure', () => {
-      const cipher = this.securePair.cleartext.getCipher();
+    this.tlsHandler.on('secure', () => {
+      const cipher = this.tlsHandler.cleartext.getCipher();
 
       if (!trustServerCertificate) {
-        let verifyError = this.securePair.ssl.verifyError();
-
-        // Verify that server's identity matches it's certificate's names
-        if (!verifyError) {
-          verifyError = tls.checkServerIdentity(hostname, this.securePair.cleartext.getPeerCertificate());
-        }
-
-        if (verifyError) {
-          this.securePair.destroy();
-          this.socket.destroy(verifyError);
+        if (!this.tlsHandler.cleartext.authorized) {
+          this.tlsHandler.destroy();
+          this.socket.destroy(this.tlsHandler.cleartext.authorizationError);
           return;
         }
       }
 
       this.debug.log('TLS negotiated (' + cipher.name + ', ' + cipher.version + ')');
-      this.emit('secure', this.securePair.cleartext);
+      this.emit('secure', this.tlsHandler.cleartext);
       this.encryptAllFutureTraffic();
     });
 
-    this.securePair.encrypted.on('data', (data) => {
+    this.tlsHandler.encrypted.on('data', (data) => {
       this.sendMessage(TYPE.PRELOGIN, data);
     });
-
-    // On Node >= 0.12, the encrypted stream automatically starts spewing out
-    // data once we attach a `data` listener. But on Node <= 0.10.x, this is not
-    // the case. We need to kick the cleartext stream once to get the
-    // encrypted end of the secure pair to emit the TLS handshake data.
-    this.securePair.cleartext.write('');
   }
 
   encryptAllFutureTraffic() {
     this.socket.unpipe(this.packetStream);
-    this.securePair.encrypted.removeAllListeners('data');
-    this.socket.pipe(this.securePair.encrypted);
-    this.securePair.encrypted.pipe(this.socket);
-    this.securePair.cleartext.pipe(this.packetStream);
+    this.tlsHandler.encrypted.removeAllListeners('data');
+    this.socket.pipe(this.tlsHandler.encrypted);
+    this.socket.removeAllListeners('close');
+    this.socket.on('close', () => {
+      this.tlsHandler.encrypted.end();
+    });
+    this.socket.on('error', () => {
+      this.tlsHandler.encrypted.end();
+    });
+    this.tlsHandler.cleartext.on('close', () => {
+      this.emit('close');
+    });
+    this.tlsHandler.encrypted.pipe(this.socket);
+    this.tlsHandler.cleartext.pipe(this.packetStream);
     this.tlsNegotiationComplete = true;
+    if (!this.socket.destroyed) {
+      // the old SecurePair worked synchronously and fired the
+      // 'secure' event before the packet was handled by
+      // RedablePacketStream. this is not the case anymore so
+      // emit 'message' manually to fire SENT_TLSSSLNEGOTIATION.message again
+      this.emit('message');
+    }
   }
 
   tlsHandshakeData(data) {
-    this.securePair.encrypted.write(data);
+    this.tlsHandler.encrypted.write(data);
   }
 
   // TODO listen for 'drain' event when socket.write returns false.
@@ -168,8 +223,8 @@ module.exports = class MessageIO extends EventEmitter {
 
   sendPacket(packet) {
     this.logPacket('Sent', packet);
-    if (this.securePair && this.tlsNegotiationComplete) {
-      this.securePair.cleartext.write(packet.buffer);
+    if (this.tlsHandler && this.tlsNegotiationComplete) {
+      this.tlsHandler.cleartext.write(packet.buffer);
     } else {
       this.socket.write(packet.buffer);
     }

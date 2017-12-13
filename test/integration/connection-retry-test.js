@@ -45,7 +45,8 @@ exports['connection retry tests'] = {
     connection.on('end', (info) => {
       test.done();
     });
-  },
+  }
+  ,
 
   'no retries on non-transient errors': function(test) {
     const config = getConfig();

@@ -357,7 +357,6 @@ class Connection extends EventEmitter {
 
     this.reset = this.reset.bind(this);
     this.socketClose = this.socketClose.bind(this);
-    this.socketEnd = this.socketEnd.bind(this);
     this.socketConnect = this.socketConnect.bind(this);
     this.socketError = this.socketError.bind(this);
     this.requestTimeout = this.requestTimeout.bind(this);
@@ -691,12 +690,11 @@ class Connection extends EventEmitter {
 
       this.socket = socket;
       this.socket.on('error', this.socketError);
-      this.socket.on('close', this.socketClose);
-      this.socket.on('end', this.socketEnd);
       this.messageIo = new MessageIO(this.socket, this.config.options.packetSize, this.debug);
       this.messageIo.on('data', (data) => { this.dispatchEvent('data', data); });
       this.messageIo.on('message', () => { this.dispatchEvent('message'); });
       this.messageIo.on('secure', this.emit.bind(this, 'secure'));
+      this.messageIo.on('close', this.socketClose);
 
       this.socketConnect();
     });
@@ -813,11 +811,6 @@ class Connection extends EventEmitter {
     this.closed = false;
     this.debug.log('connected to ' + this.config.server + ':' + this.config.options.port);
     return this.dispatchEvent('socketConnect');
-  }
-
-  socketEnd() {
-    this.debug.log('socket ended');
-    return this.transitionTo(this.STATE.FINAL);
   }
 
   socketClose() {
