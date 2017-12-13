@@ -174,6 +174,10 @@ module.exports = class MessageIO extends EventEmitter {
     this.tlsHandler.cleartext.pipe(this.packetStream);
     this.tlsNegotiationComplete = true;
     if (!this.socket.destroyed) {
+      // the old SecurePair worked synchronously and fired the
+      // 'secure' event before the packet was handled by
+      // RedablePacketStream. this is not the case anymore so
+      // emit 'message' manually to fire SENT_TLSSSLNEGOTIATION.message again
       this.emit('message');
     }
   }
