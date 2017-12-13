@@ -87,8 +87,14 @@ class TLSHandler extends EventEmitter {
   }
 
   destroy() {
-    this.encrypted.destroy()
-    this.cleartext.destroy()
+    if (this.encrypted.destroy) {
+      this.encrypted.removeAllListeners('data');
+      //this.encrypted.destroy()
+    }
+    if (this.cleartext.destroy) {
+      this.cleartext.removeAllListeners('data');
+      //this.cleartext.destroy()
+    }
   }
 }
 
@@ -103,10 +109,12 @@ module.exports = class MessageIO extends EventEmitter {
 
     this.packetStream = new ReadablePacketStream();
     this.packetStream.on('data', (packet) => {
+      if (this.socket.destroyed) {
+        return
+      }
       this.logPacket('Received', packet);
       this.emit('data', packet.data());
       if (packet.isLast()) {
-        console.log('islast therefore message', packet.headerToString())
         this.emit('message');
       }
     });
@@ -127,6 +135,11 @@ module.exports = class MessageIO extends EventEmitter {
   startTls(credentialsDetails, hostname, trustServerCertificate) {
     const credentials = tls.createSecureContext ? tls.createSecureContext(credentialsDetails) : crypto.createCredentials(credentialsDetails);
 
+    this.socket.on('close', () => {
+      this.closed = true;
+      this.tlsHandler.destroy()
+    })
+
     this.tlsHandler = new TLSHandler(credentials)
 
     //this.securePair = tls.createSecurePair(credentials);
@@ -144,7 +157,6 @@ module.exports = class MessageIO extends EventEmitter {
       }
 
       this.debug.log('TLS negotiated (' + cipher.name + ', ' + cipher.version + ')');
-      console.log('TLS negotiated (' + cipher.name + ', ' + cipher.version + ')');
       this.emit('secure', this.tlsHandler.cleartext);
       this.encryptAllFutureTraffic();
     });
@@ -161,6 +173,9 @@ module.exports = class MessageIO extends EventEmitter {
     this.tlsHandler.encrypted.pipe(this.socket);
     this.tlsHandler.cleartext.pipe(this.packetStream);
     this.tlsNegotiationComplete = true;
+    if (!this.socket.destroyed) {
+      this.emit('message');
+    }
   }
 
   tlsHandshakeData(data) {
