@@ -17,7 +17,6 @@ class ReadablePacketStream extends Transform {
   }
 
   _transform(chunk, encoding, callback) {
-    console.log('chunk', chunk.toString('hex'))
     if (this.position === this.buffer.length) {
       // If we have fully consumed the previous buffer,
       // we can just replace it with the new chunk
@@ -41,11 +40,9 @@ class ReadablePacketStream extends Transform {
         const data = this.buffer.slice(this.position, this.position + length);
         this.position += length;
         this.push(new Packet(data));
-        console.log('got packet', data.toString('hex'))
       } else {
         // Not enough data to provide the next packet. Stop here and wait for
         // the next call to `_transform`.
-        console.log('data left')
         break;
       }
     }
@@ -68,7 +65,6 @@ class TLSHandler extends EventEmitter {
         rejectUnauthorized: false
       })
       self.cleartext.on('secureConnect', () => {
-        console.log('handshake done!')
         self.emit('secure')
         self.cleartext.write('')
       })
@@ -110,6 +106,7 @@ module.exports = class MessageIO extends EventEmitter {
       this.logPacket('Received', packet);
       this.emit('data', packet.data());
       if (packet.isLast()) {
+        console.log('islast therefore message', packet.headerToString())
         this.emit('message');
       }
     });
@@ -136,7 +133,6 @@ module.exports = class MessageIO extends EventEmitter {
     this.tlsNegotiationComplete = false;
 
     this.tlsHandler.on('secure', () => {
-      console.log('tlshandler on secure')
       const cipher = this.tlsHandler.cleartext.getCipher();
 
       if (!trustServerCertificate) {
@@ -159,12 +155,12 @@ module.exports = class MessageIO extends EventEmitter {
   }
 
   encryptAllFutureTraffic() {
-    this.tlsNegotiationComplete = true;
     this.socket.unpipe(this.packetStream);
     this.tlsHandler.encrypted.removeAllListeners('data');
     this.socket.pipe(this.tlsHandler.encrypted);
     this.tlsHandler.encrypted.pipe(this.socket);
     this.tlsHandler.cleartext.pipe(this.packetStream);
+    this.tlsNegotiationComplete = true;
   }
 
   tlsHandshakeData(data) {
