@@ -63,35 +63,35 @@ class TLSHandler extends EventEmitter {
         port: self.server.address().port,
         secureContext: secureContext,
         rejectUnauthorized: false
-      })
+      });
       self.cleartext.on('secureConnect', () => {
-        self.emit('secure')
-        self.cleartext.write('')
-      })
-    })
+        self.emit('secure');
+        self.cleartext.write('');
+      });
+    });
 
     const encryptedOnQueue = [];
     self.encrypted = {
       on: (event, cb) => {
-        encryptedOnQueue.push([event, cb])
+        encryptedOnQueue.push([event, cb]);
       }
-    }
+    };
 
-    self.server.on('connection', socket => {
+    self.server.on('connection', (socket) => {
       self.encrypted = socket;
       encryptedOnQueue.forEach(([event, cb]) => {
-        self.encrypted.on(event, cb)
-      })
-      self.server.close()
-    })
+        self.encrypted.on(event, cb);
+      });
+      self.server.close();
+    });
   }
 
   destroy() {
     if (this.encrypted && this.encrypted.destroy) {
-      this.encrypted.destroy()
+      this.encrypted.destroy();
     }
     if (this.cleartext && this.cleartext.destroy) {
-      this.cleartext.destroy()
+      this.cleartext.destroy();
     }
   }
 }
@@ -118,8 +118,8 @@ module.exports = class MessageIO extends EventEmitter {
     this.packetDataSize = this._packetSize - packetHeaderLength;
 
     this.socket.on('close', () => {
-      this.emit('close')
-    })
+      this.emit('close');
+    });
   }
 
   packetSize(packetSize) {
@@ -134,13 +134,8 @@ module.exports = class MessageIO extends EventEmitter {
   startTls(credentialsDetails, hostname, trustServerCertificate) {
     const credentials = tls.createSecureContext ? tls.createSecureContext(credentialsDetails) : crypto.createCredentials(credentialsDetails);
 
-    /*this.socket.on('close', () => {
-      this.tlsHandler.destroy()
-    })*/
+    this.tlsHandler = new TLSHandler(credentials);
 
-    this.tlsHandler = new TLSHandler(credentials)
-
-    //this.securePair = tls.createSecurePair(credentials);
     this.tlsNegotiationComplete = false;
 
     this.tlsHandler.on('secure', () => {
@@ -171,13 +166,13 @@ module.exports = class MessageIO extends EventEmitter {
     this.socket.removeAllListeners('close');
     this.socket.on('close', () => {
       this.tlsHandler.encrypted.end();
-    })
+    });
     this.socket.on('error', () => {
       this.tlsHandler.encrypted.end();
     });
     this.tlsHandler.cleartext.on('close', () => {
       this.emit('close');
-    })
+    });
     this.tlsHandler.encrypted.pipe(this.socket);
     this.tlsHandler.cleartext.pipe(this.packetStream);
     this.tlsNegotiationComplete = true;
