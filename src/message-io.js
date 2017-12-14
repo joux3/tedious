@@ -87,13 +87,11 @@ class TLSHandler extends EventEmitter {
   }
 
   destroy() {
-    if (this.encrypted.destroy) {
-      this.encrypted.removeAllListeners('data');
-      //this.encrypted.destroy()
+    if (this.encrypted && this.encrypted.destroy) {
+      this.encrypted.destroy()
     }
-    if (this.cleartext.destroy) {
-      this.cleartext.removeAllListeners('data');
-      //this.cleartext.destroy()
+    if (this.cleartext && this.cleartext.destroy) {
+      this.cleartext.destroy()
     }
   }
 }
@@ -109,9 +107,6 @@ module.exports = class MessageIO extends EventEmitter {
 
     this.packetStream = new ReadablePacketStream();
     this.packetStream.on('data', (packet) => {
-      if (this.socket.destroyed) {
-        return
-      }
       this.logPacket('Received', packet);
       this.emit('data', packet.data());
       if (packet.isLast()) {
@@ -121,6 +116,10 @@ module.exports = class MessageIO extends EventEmitter {
 
     this.socket.pipe(this.packetStream);
     this.packetDataSize = this._packetSize - packetHeaderLength;
+
+    this.socket.on('close', () => {
+      this.emit('close')
+    })
   }
 
   packetSize(packetSize) {
@@ -135,9 +134,9 @@ module.exports = class MessageIO extends EventEmitter {
   startTls(credentialsDetails, hostname, trustServerCertificate) {
     const credentials = tls.createSecureContext ? tls.createSecureContext(credentialsDetails) : crypto.createCredentials(credentialsDetails);
 
-    this.socket.on('close', () => {
+    /*this.socket.on('close', () => {
       this.tlsHandler.destroy()
-    })
+    })*/
 
     this.tlsHandler = new TLSHandler(credentials)
 
@@ -168,10 +167,17 @@ module.exports = class MessageIO extends EventEmitter {
   encryptAllFutureTraffic() {
     this.socket.unpipe(this.packetStream);
     this.tlsHandler.encrypted.removeAllListeners('data');
-    this.socket.on('data', (data) => {
-      this.tlsHandler.encrypted.write(data);
+    this.socket.pipe(this.tlsHandler.encrypted);
+    this.socket.removeAllListeners('close');
+    this.socket.on('close', () => {
+      this.tlsHandler.encrypted.end();
     })
-    this.socket.resume();
+    this.socket.on('error', () => {
+      this.tlsHandler.encrypted.end();
+    });
+    this.tlsHandler.cleartext.on('close', () => {
+      this.emit('close');
+    })
     this.tlsHandler.encrypted.pipe(this.socket);
     this.tlsHandler.cleartext.pipe(this.packetStream);
     this.tlsNegotiationComplete = true;
