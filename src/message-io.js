@@ -136,7 +136,6 @@ module.exports = class MessageIO extends EventEmitter {
     const credentials = tls.createSecureContext ? tls.createSecureContext(credentialsDetails) : crypto.createCredentials(credentialsDetails);
 
     this.socket.on('close', () => {
-      this.closed = true;
       this.tlsHandler.destroy()
     })
 
@@ -169,7 +168,10 @@ module.exports = class MessageIO extends EventEmitter {
   encryptAllFutureTraffic() {
     this.socket.unpipe(this.packetStream);
     this.tlsHandler.encrypted.removeAllListeners('data');
-    this.socket.pipe(this.tlsHandler.encrypted);
+    this.socket.on('data', (data) => {
+      this.tlsHandler.encrypted.write(data);
+    })
+    this.socket.resume();
     this.tlsHandler.encrypted.pipe(this.socket);
     this.tlsHandler.cleartext.pipe(this.packetStream);
     this.tlsNegotiationComplete = true;

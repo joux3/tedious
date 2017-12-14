@@ -765,6 +765,7 @@ class Connection extends EventEmitter {
   }
 
   transitionTo(newState) {
+    //console.log('new state', newState.name)
     if (this.state === newState) {
       this.debug.log('State is already ' + newState.name);
       return;
