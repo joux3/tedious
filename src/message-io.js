@@ -1,5 +1,6 @@
 const tls = require('tls');
 const crypto = require('crypto');
+const DuplexPair = require('duplexpair');
 const EventEmitter = require('events').EventEmitter;
 const Transform = require('readable-stream').Transform;
 
@@ -67,6 +68,9 @@ module.exports = class MessageIO extends EventEmitter {
         this.emit('message');
       }
     });
+    this.packetStream.on('end', () => {
+      this.emit('close')
+    })
 
     this.socket.pipe(this.packetStream);
     this.packetDataSize = this._packetSize - packetHeaderLength;
@@ -84,23 +88,23 @@ module.exports = class MessageIO extends EventEmitter {
   startTls(credentialsDetails, hostname, trustServerCertificate) {
     const credentials = tls.createSecureContext ? tls.createSecureContext(credentialsDetails) : crypto.createCredentials(credentialsDetails);
 
-    this.securePair = tls.createSecurePair(credentials);
+    const duplexpair = new DuplexPair();
+    this.securePair = {
+      cleartext: new tls.TLSSocket(duplexpair.socket1, {
+        secureContext: credentials,
+        rejectUnauthorized: false
+      }),
+      encrypted: duplexpair.socket2
+    };
     this.tlsNegotiationComplete = false;
 
-    this.securePair.on('secure', () => {
+    this.securePair.cleartext.on('secure', () => {
       const cipher = this.securePair.cleartext.getCipher();
 
       if (!trustServerCertificate) {
-        let verifyError = this.securePair.ssl.verifyError();
-
-        // Verify that server's identity matches it's certificate's names
-        if (!verifyError) {
-          verifyError = tls.checkServerIdentity(hostname, this.securePair.cleartext.getPeerCertificate());
-        }
-
-        if (verifyError) {
-          this.securePair.destroy();
-          this.socket.destroy(verifyError);
+        if (!this.tlsHandler.cleartext.authorized) {
+          this.securePair.cleartext.destroy()
+          this.socket.destroy(this.tlsHandler.cleartext.authorizationError);
           return;
         }
       }
@@ -127,6 +131,9 @@ module.exports = class MessageIO extends EventEmitter {
     this.socket.pipe(this.securePair.encrypted);
     this.securePair.encrypted.pipe(this.socket);
     this.securePair.cleartext.pipe(this.packetStream);
+    this.socket.on('close', () => {
+      this.securePair.encrypted.end()
+    })
     this.tlsNegotiationComplete = true;
   }
 
